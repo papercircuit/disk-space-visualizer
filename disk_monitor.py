@@ -201,9 +201,12 @@ class DiskMonitor:
                 total_kb = float(parts[1])  # Convert to float first
                 used_kb = float(parts[2])
                 
-                # Convert KB to GB (using 1024 for proper binary conversion)
-                total_gb = total_kb / (1024 * 1024)  # KB to GB
-                used_gb = used_kb / (1024 * 1024)    # KB to GB
+                # Convert KB to GB (using 1000 for consistency with system values)
+                BYTES_TO_GB = 1000 * 1000 * 1000  # 1 GB = 1000 MB = 1000000 KB = 1000000000 B
+                KB_TO_GB = 1000 * 1000  # Number of KB in a GB
+                
+                total_gb = total_kb / KB_TO_GB
+                used_gb = used_kb / KB_TO_GB
                 
                 return total_gb, used_gb
                 
