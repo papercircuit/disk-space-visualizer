@@ -5,6 +5,7 @@ import tkinter as tk
 from collections import deque
 import time
 import numpy as np
+import subprocess
 
 class DiskMonitor:
     def __init__(self):
@@ -48,9 +49,9 @@ class DiskMonitor:
         self.reset_button = tk.Button(self.control_frame, text="Reset", command=self.reset_plot)
         self.reset_button.pack(side=tk.LEFT)
         
-        # Adjust margins to make room for rotated labels
+        # Adjust margins to better accommodate both info box and reference texts
         self.fig.subplots_adjust(
-            bottom=0.25,     # Increased to make room for labels and info box
+            bottom=0.25,     # Reduced to move plot up
             left=0.15,      
             right=0.92,     
             top=0.95
@@ -72,11 +73,12 @@ class DiskMonitor:
         self.ax.set_ylim(0, self.total_gb)
         self.ax.grid(True, linestyle=':', linewidth=0.5)
         
-        # Create centered info text
-        self.info_text = self.fig.text(0.5, 0.08, 'Initializing...',  # Add initial text to help with positioning
+        # Create centered info text with higher position
+        self.info_text = self.fig.text(0.5, 0.15,  # Moved up from 0.08
+                                     'Initializing...',
                                      fontsize=5,
-                                     horizontalalignment='center',  # Center the text
-                                     transform=self.fig.transFigure,  # Use figure coordinates
+                                     horizontalalignment='center',
+                                     transform=self.fig.transFigure,
                                      bbox=dict(
                                          facecolor='white',
                                          alpha=0.8,
@@ -86,7 +88,7 @@ class DiskMonitor:
                                      ))
         
         # Update interval (ms)
-        self.update_interval = 1000
+        self.update_interval = 100
         
         # Add after creating the plot
         self.cursor_line = self.ax.axvline(x=0, color='gray', linestyle=':', alpha=0, linewidth=0.8)
@@ -132,6 +134,23 @@ class DiskMonitor:
         self.reference_labels = []  # Store the tick labels
         self.reference_texts = []   # Store the text objects
         self.max_references = 5
+        
+        # Add Docker container configuration
+        self.docker_config = {
+            'image_name': 'localmssql_prokit_database',
+            'container_name': 'localmssql'
+        }
+        
+        # Add Docker usage lines
+        self.docker_usage = deque()
+        self.docker_line, = self.ax.plot([], [], 'r-', linewidth=1, label='Docker Usage')
+        self.line.set_label('System')  # Add label to existing line
+        
+        # Add Docker capacity line (horizontal)
+        self.docker_capacity_line = self.ax.axhline(y=0, color='r', linestyle='--', alpha=0.3, linewidth=1, label='Docker Capacity')
+        
+        # Add legend with all three lines
+        self.ax.legend(fontsize=5, loc='upper right')
     
     def get_disk_usage(self):
         try:
@@ -155,52 +174,102 @@ class DiskMonitor:
             print(f"Error reading disk usage: {e}")
             return 0, 0, 0, 0
     
+    def get_docker_container_name(self):
+        try:
+            # Get list of running containers
+            cmd = "docker ps --format '{{.Names}}' | grep -i prokit_database"
+            container_name = subprocess.check_output(cmd, shell=True, text=True).strip()
+            return container_name
+        except Exception as e:
+            print(f"Error finding Docker container: {e}")
+            return None
+    
+    def get_docker_usage(self):
+        try:
+            # Get current container name
+            container_name = self.get_docker_container_name()
+            if not container_name:
+                return None, None
+
+            # Get root filesystem usage (where SQL Server data is stored)
+            cmd = f"docker exec {container_name} df -k / | tail -1"
+            result = subprocess.check_output(cmd, shell=True, text=True).strip()
+            
+            # Split the df output and get total and used
+            parts = result.split()
+            if len(parts) >= 4:  # Make sure we have enough columns
+                total_kb = float(parts[1])  # Convert to float first
+                used_kb = float(parts[2])
+                
+                # Convert KB to GB (using 1024 for proper binary conversion)
+                total_gb = total_kb / (1024 * 1024)  # KB to GB
+                used_gb = used_kb / (1024 * 1024)    # KB to GB
+                
+                return total_gb, used_gb
+                
+            return None, None
+                
+        except Exception as e:
+            print(f"Error reading Docker disk usage: {e}")
+            return None, None
+    
     def update_plot(self):
         # Initialize start_time on first update
         if self.start_time is None:
             self.start_time = time.time()
-            current_time = 0  # Force first point to be at 0
+            current_time = 0
         else:
-            current_time = (time.time() - self.start_time) / 60  # Convert to minutes
-        
+            current_time = (time.time() - self.start_time) / 60
+
+        # Get system usage
         total_gb, used_gb, available_gb, percent = self.get_disk_usage()
         
+        # Get Docker usage
+        docker_total_gb, docker_used_gb = self.get_docker_usage()
+        
+        # Update Docker capacity line if we have valid data
+        if docker_total_gb is not None:
+            self.docker_capacity_line.set_ydata([docker_total_gb, docker_total_gb])
+            self.docker_capacity_line.set_alpha(0.3)  # Make visible
+        else:
+            self.docker_capacity_line.set_alpha(0)  # Hide if no data
+        
+        # Append time and system usage
         self.times.append(current_time)
         self.usage.append(used_gb)
         
-        # Convert deques to lists for plotting
+        # Append Docker usage (with proper handling of None)
+        if docker_used_gb is not None:
+            self.docker_usage.append(docker_used_gb)
+        else:
+            self.docker_usage.append(0)
+
+        # Update both lines
         times_list = list(self.times)
-        usage_list = list(self.usage)
+        self.line.set_data(times_list, list(self.usage))
+        self.docker_line.set_data(times_list, list(self.docker_usage))
         
-        self.line.set_data(times_list, usage_list)
+        # Update axis limits
         self.ax.relim()
-        self.ax.autoscale_view(scalex=True, scaley=False)  # Only autoscale x-axis
+        self.ax.autoscale_view(scalex=True, scaley=False)
+        self.ax.set_xlim(left=0, right=current_time + 0.5)
         
-        # Add small padding to the right (in minutes)
-        self.ax.set_xlim(left=0, right=current_time + 0.5)  # Changed from 5 seconds to 0.5 minutes
+        # Update info text
+        if docker_total_gb is not None and docker_used_gb is not None:
+            docker_percent = (docker_used_gb/docker_total_gb*100)
+            info_str = (
+                f'System: {used_gb:.1f}/{total_gb:.1f}GB ({percent:.1f}%)  •  '
+                f'Docker: {docker_used_gb:.1f}/{docker_total_gb:.1f}GB ({docker_percent:.1f}%)'
+            )
+        else:
+            info_str = (
+                f'System: {used_gb:.1f}/{total_gb:.1f}GB ({percent:.1f}%)  •  '
+                f'Docker: Not Available'
+            )
         
-        # Format info text with line breaks and shorter labels
-        info_str = (
-            f'Total: {total_gb:.1f}GB  •  '
-            f'Used: {used_gb:.1f}GB  •  '
-            f'Free: {available_gb:.1f}GB  •  '
-            f'Usage: {percent:.1f}%'
-        )
-        
-        # Update info text position and size
-        self.info_text.set_position((0.5, 0.08))  # Center horizontally
-        self.info_text.set_transform(self.fig.transFigure)  # Ensure using figure coordinates
         self.info_text.set_text(info_str)
         
-        # Update box properties for better fit
-        self.info_text.set_bbox(dict(
-            facecolor='white',
-            alpha=0.8,
-            pad=2,
-            linewidth=0.5
-        ))
-        
-        # Force a complete redraw and update background
+        # Force redraw
         self.canvas.draw()
         self.background = self.canvas.copy_from_bbox(self.fig.bbox)
         
@@ -260,9 +329,9 @@ class DiskMonitor:
         click_y = event.ydata
         
         # Check if click is near any reference line
-        for i, (ref_time, _) in enumerate(self.reference_data):
+        for i, (ref_time, _, _) in enumerate(self.reference_data):  # Updated to handle 3 values
             # Check if click is within small distance of reference line
-            if abs(click_x - ref_time) < 0.1:  # Adjust threshold as needed
+            if abs(click_x - ref_time) < 0.01:  # Adjust threshold as needed
                 # Remove corresponding line, label, data and text
                 self.reference_lines[i].remove()
                 self.reference_labels[i].remove()
@@ -288,11 +357,12 @@ class DiskMonitor:
         if not (click_x <= max(self.times) and click_x >= 0):
             return
 
-        # Find closest data point
+        # Find closest data point for both system and Docker
         times_array = np.array(self.times)
         idx = np.abs(times_array - click_x).argmin()
         x_val = times_array[idx]
-        y_val = list(self.usage)[idx]
+        sys_val = list(self.usage)[idx]
+        docker_val = list(self.docker_usage)[idx]
 
         # Create new reference line with unique color
         color = plt.cm.Set3(len(self.reference_lines) / self.max_references)
@@ -306,10 +376,10 @@ class DiskMonitor:
             transform=self.ax.get_xaxis_transform(),
             color=color)
         
-        # Store reference line, label and data
+        # Store reference line, label and data (now including Docker value)
         self.reference_lines.append(ref_line)
         self.reference_labels.append(label)
-        self.reference_data.append((x_val, y_val))
+        self.reference_data.append((x_val, sys_val, docker_val))
 
         # Clear existing reference texts
         for text in self.reference_texts:
@@ -319,20 +389,22 @@ class DiskMonitor:
         # Create new text objects for each reference with better spacing
         num_refs = len(self.reference_data)
         if num_refs > 0:
-            # Calculate spacing to spread texts evenly
-            total_width = 0.7    # Use 70% of figure width
-            start_pos = 0.15     # Start at 15% from left
-            gap = total_width / (self.max_references - 1) if num_refs > 1 else total_width  # Space between items
-            
-            for i, (t, v) in enumerate(self.reference_data):
+            # Calculate spacing to spread texts evenly horizontally
+            total_width = 0.7
+            start_pos = 0.15
+            gap = total_width / (self.max_references - 1) if num_refs > 1 else total_width
+
+            for i, (t, v, d) in enumerate(self.reference_data):
                 color_i = plt.cm.Set3(i / self.max_references)
-                x_pos = start_pos + (i * gap)  # Position each text with fixed gap
-                # Make text more compact by removing spaces
-                text = self.fig.text(x_pos, 0.02, 
-                    f'T{i+1}:{t:.1f}m-{v:.1f}GB',  # Removed spaces to make more compact
+                x_pos = start_pos + (i * gap)
+                
+                # Create vertical text with each piece of info on its own line
+                text = self.fig.text(x_pos, 0.02,
+                    f'T{i+1}:\n{t:.1f}m\nSys:{v:.1f}GB\nDoc:{d:.1f}GB',
                     color=color_i,
                     fontsize=5,
                     horizontalalignment='left',
+                    verticalalignment='bottom',
                     transform=self.fig.transFigure)
                 self.reference_texts.append(text)
 
@@ -360,15 +432,24 @@ class DiskMonitor:
             start_pos = 0.15
             gap = total_width / (self.max_references - 1) if num_refs > 1 else total_width
 
-            for i, (t, v) in enumerate(self.reference_data):
+            for i, (t, v, d) in enumerate(self.reference_data):
                 color_i = plt.cm.Set3(i / self.max_references)
                 x_pos = start_pos + (i * gap)
-                text = self.fig.text(x_pos, 0.02,
-                    f'T{i+1}:{t:.1f}m-{v:.1f}GB',
+                
+                # Create vertical text with adjusted position and spacing
+                text = self.fig.text(x_pos, 0.02,  # Keep at bottom
+                    f'T{i+1}:\n{t:.1f}m\nSys:{v:.1f}GB\nDoc:{d:.1f}GB',
                     color=color_i,
                     fontsize=5,
                     horizontalalignment='left',
-                    transform=self.fig.transFigure)
+                    verticalalignment='bottom',
+                    transform=self.fig.transFigure,
+                    bbox=dict(  # Add a white background to prevent overlap
+                        facecolor='white',
+                        alpha=0.8,
+                        pad=1,
+                        edgecolor='none'
+                    ))
                 self.reference_texts.append(text)
     
     def reset_plot(self):
@@ -397,6 +478,14 @@ class DiskMonitor:
         
         # Reset x-axis limits
         self.ax.set_xlim(left=0, right=0.5)  # 0.5 minutes initial view
+        
+        # Clear Docker usage
+        self.docker_usage.clear()
+        self.docker_line.set_data([], [])
+        
+        # Reset Docker capacity line
+        self.docker_capacity_line.set_ydata([0, 0])
+        self.docker_capacity_line.set_alpha(0)
         
         # Force redraw
         self.canvas.draw()
