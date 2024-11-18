@@ -1,10 +1,12 @@
+import asyncio
 import tkinter as tk
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from collections import deque
+from functools import partial
 
 from utils.disk_utils import get_disk_usage
-from utils.docker_utils import get_docker_usage
+from utils.docker_utils import get_docker_usage, get_docker_usage_async
 from ui.plot_manager import PlotManager
 from ui.event_handlers import EventHandler
 
@@ -15,6 +17,10 @@ class DiskMonitor:
         self.plot_manager = PlotManager(self)
         self.event_handler = EventHandler(self)
         self.setup_update_interval()
+        
+        # Create async event loop
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
     
     def setup_window(self):
         self.root = tk.Tk()
@@ -34,13 +40,27 @@ class DiskMonitor:
         self.start_time = None
     
     def setup_update_interval(self):
-        self.update_interval = 100
+        self.update_interval = 500
     
     def get_disk_usage(self):
         return get_disk_usage()
     
+    async def get_docker_usage_async(self):
+        return await get_docker_usage_async()
+    
     def get_docker_usage(self):
-        return get_docker_usage()
+        # Return last known values if async operation is running
+        if not hasattr(self, 'last_docker_values'):
+            self.last_docker_values = (None, None)
+        return self.last_docker_values
+    
+    async def update_docker_usage(self):
+        while True:
+            self.last_docker_values = await self.get_docker_usage_async()
+            await asyncio.sleep(1)  # Update every second
+    
+    def start_async_tasks(self):
+        self.loop.create_task(self.update_docker_usage())
     
     def update_plot(self):
         self.plot_manager.update()
@@ -50,5 +70,18 @@ class DiskMonitor:
         self.plot_manager.reset()
     
     def run(self):
+        # Start async tasks in background
+        self.start_async_tasks()
+        
+        # Run event loop in separate thread
+        import threading
+        thread = threading.Thread(target=self._run_event_loop, daemon=True)
+        thread.start()
+        
+        # Start UI update
         self.root.after(0, self.update_plot)
         self.root.mainloop()
+    
+    def _run_event_loop(self):
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_forever()

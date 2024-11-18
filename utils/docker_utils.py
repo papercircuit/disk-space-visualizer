@@ -1,4 +1,8 @@
 import subprocess
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
+_executor = ThreadPoolExecutor(max_workers=1)
 
 def get_docker_container_name():
     try:
@@ -8,6 +12,15 @@ def get_docker_container_name():
     except Exception as e:
         print(f"Error finding Docker container: {e}")
         return None
+
+async def get_docker_usage_async():
+    try:
+        # Run Docker operations in a separate thread
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(_executor, get_docker_usage)
+    except Exception as e:
+        print(f"Error in async Docker usage check: {e}")
+        return None, None
 
 def get_docker_usage():
     try:
