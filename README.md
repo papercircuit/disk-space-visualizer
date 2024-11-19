@@ -20,7 +20,7 @@ Verify Python 3 is installed:
 
 ### 2. Install Required Packages
 Install the required Python packages using pip3:
-`pip3 install psutil matplotlib`
+`pip3 install psutil pyqtgraph PyQt6`
 
 ### 3. Docker Setup (Optional)
 If you want to monitor Docker containers, make sure Docker Desktop for Mac is installed and running.

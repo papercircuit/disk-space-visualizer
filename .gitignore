@@ -26,3 +26,8 @@ build/
 
 # Logs
 *.log
+
+# Hot reload artifacts
+*.pyc
+__pycache__/
+.hot-reload.lock

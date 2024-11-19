@@ -1,9 +1,10 @@
 import asyncio
-import tkinter as tk
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import QTimer
+import sys
+import threading
 from collections import deque
-from functools import partial
+import signal
 
 from utils.disk_utils import get_disk_usage
 from utils.docker_utils import get_docker_usage, get_docker_usage_async
@@ -12,26 +13,29 @@ from ui.event_handlers import EventHandler
 
 class DiskMonitor:
     def __init__(self):
-        self.setup_window()
+        self.app = QApplication(sys.argv)
+        self.app.aboutToQuit.connect(self.cleanup)  # Connect cleanup to quit signal
         self.setup_data_structures()
         self.plot_manager = PlotManager(self)
-        self.event_handler = EventHandler(self)
         self.setup_update_interval()
         
         # Create async event loop
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
+        
+        # Setup timer for updates
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_plot)
+        self.timer.start(self.update_interval)
+        
+        # Flag for clean shutdown
+        self.running = True
+        self.paused = False
     
-    def setup_window(self):
-        self.root = tk.Tk()
-        self.root.title("Disk Space Monitor")
-        self.root.geometry("700x800")
-        
-        self.control_frame = tk.Frame(self.root)
-        self.control_frame.pack(fill=tk.X, padx=5, pady=5)
-        
-        self.reset_button = tk.Button(self.control_frame, text="Reset", command=self.reset_plot)
-        self.reset_button.pack(side=tk.LEFT)
+    def cleanup(self):
+        self.running = False
+        self.timer.stop()
+        self.loop.call_soon_threadsafe(self.loop.stop)  # Stop event loop safely
     
     def setup_data_structures(self):
         self.times = deque()
@@ -55,33 +59,39 @@ class DiskMonitor:
         return self.last_docker_values
     
     async def update_docker_usage(self):
-        while True:
-            self.last_docker_values = await self.get_docker_usage_async()
-            await asyncio.sleep(1)  # Update every second
+        while self.running:
+            values = await self.get_docker_usage_async()
+            self.last_docker_values = values
+            await asyncio.sleep(1)
     
     def start_async_tasks(self):
         self.loop.create_task(self.update_docker_usage())
     
     def update_plot(self):
-        self.plot_manager.update()
-        self.root.after(self.update_interval, self.update_plot)
+        if not self.paused:
+            self.plot_manager.update()
     
     def reset_plot(self):
         self.plot_manager.reset()
     
     def run(self):
-        # Start async tasks in background
         self.start_async_tasks()
         
         # Run event loop in separate thread
-        import threading
         thread = threading.Thread(target=self._run_event_loop, daemon=True)
         thread.start()
         
-        # Start UI update
-        self.root.after(0, self.update_plot)
-        self.root.mainloop()
+        # Start Qt event loop
+        sys.exit(self.app.exec())
     
     def _run_event_loop(self):
         asyncio.set_event_loop(self.loop)
         self.loop.run_forever()
+    
+    def pause(self):
+        self.paused = True
+        self.timer.stop()
+    
+    def resume(self):
+        self.paused = False
+        self.timer.start(self.update_interval)

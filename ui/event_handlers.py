@@ -1,6 +1,5 @@
 import time
 import numpy as np
-import matplotlib.pyplot as plt
 
 class EventHandler:
     def __init__(self, monitor):
