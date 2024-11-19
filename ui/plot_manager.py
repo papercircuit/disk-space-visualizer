@@ -2,20 +2,24 @@ import pyqtgraph as pg
 from PyQt6.QtCore import Qt
 import numpy as np
 import time
-from PyQt6.QtWidgets import QPushButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QPushButton, QVBoxLayout, QWidget, QComboBox, QHBoxLayout
 import math
+from utils.disk_utils import get_available_drives
 
 class PlotManager:
     def __init__(self, monitor):
         self.monitor = monitor
-        self.y_max = 100  # Default value until first update
+        
+        # Create main widget and layout first
+        self.main_widget = QWidget()
+        layout = QVBoxLayout()
         
         # Create plot widget
         self.win = pg.GraphicsLayoutWidget()
-        self.win.setBackground('w')  # White background
+        self.win.setBackground('w')
         self.win.ci.setSpacing(0)  # Remove spacing between items
         
-        # Create plot
+        # Create plot first
         self.plot = self.win.addPlot()
         self.plot.hideButtons()
         self.plot.showGrid(x=True, y=True, alpha=0.3)
@@ -23,16 +27,11 @@ class PlotManager:
         self.plot.setLabel('left', 'Disk Usage (GB)')
         self.plot.setTitle('Disk Space Monitor')
         
-        # Force x-axis to always show at bottom
-       
-        
         # Set axis behavior
         self.plot.getViewBox().setMouseEnabled(x=False, y=False)
-        self.plot.getViewBox().enableAutoRange(y=False)  # Disable auto-range for y-axis
-        
-        # Force y-axis to show nice numbers
-        self.plot.getAxis('left').enableAutoSIPrefix(False)  # Disable SI prefix
-        self.plot.getAxis('bottom').enableAutoSIPrefix(False)  # Disable SI prefix
+        self.plot.getViewBox().enableAutoRange(y=False)
+        self.plot.getAxis('left').enableAutoSIPrefix(False)
+        self.plot.getAxis('bottom').enableAutoSIPrefix(False)
         
         # Create curves
         self.system_curve = self.plot.plot(pen=pg.mkPen('b', width=2), name='System')
@@ -51,32 +50,44 @@ class PlotManager:
         self.win.addItem(self.info_label, row=1, col=0)
         self.info_label.setText('Initializing...')
         
-        # Reference points
+        # Add plot widget to layout first
+        layout.addWidget(self.win)
+        
+        # Create bottom controls container
+        bottom_layout = QHBoxLayout()
+        
+        # Create reset button
+        self.reset_button = QPushButton('Reset')
+        self.reset_button.clicked.connect(self.reset)
+        bottom_layout.addWidget(self.reset_button)
+        
+        # Create pause button
+        self.pause_button = QPushButton('Pause')
+        self.pause_button.setCheckable(True)
+        self.pause_button.clicked.connect(self.toggle_pause)
+        bottom_layout.addWidget(self.pause_button)
+        
+        # Add spacer to push drive selector to right
+        bottom_layout.addStretch()
+        
+        # Create drive selection combo box
+        self.drive_combo = QComboBox()
+        self.drive_combo.setMinimumWidth(200)  # Make dropdown wider
+        self.update_drive_list()
+        self.drive_combo.currentIndexChanged.connect(self.on_drive_changed)
+        bottom_layout.addWidget(self.drive_combo)
+        
+        # Add bottom controls to main layout
+        layout.addLayout(bottom_layout)
+        
+        # Set layout
+        self.main_widget.setLayout(layout)
+        self.main_widget.show()
+        
+        # Initialize reference points storage
         self.reference_lines = []
         self.reference_labels = []
         self.reference_data = []
-        
-        # Create main widget and layout
-        self.main_widget = QWidget()
-        layout = QVBoxLayout()
-        
-        # Add plot widget
-        layout.addWidget(self.win)
-        
-        # Create and add reset button
-        self.reset_button = QPushButton('Reset')
-        self.reset_button.clicked.connect(self.reset)
-        layout.addWidget(self.reset_button)
-        
-        # Create and add pause button
-        self.pause_button = QPushButton('Pause')
-        self.pause_button.setCheckable(True)  # Makes it a toggle button
-        self.pause_button.clicked.connect(self.toggle_pause)
-        layout.addWidget(self.pause_button)
-        
-        # Set layout and show
-        self.main_widget.setLayout(layout)
-        self.main_widget.show()
         
         # Connect mouse events
         self.plot.scene().sigMouseMoved.connect(self.mouse_moved)
@@ -85,6 +96,25 @@ class PlotManager:
         # After creating self.plot
         self.plot.getViewBox().setDefaultPadding(0)  # Remove default padding
         self.plot.setContentsMargins(10, 10, 10, 50)  # Add bottom margin for labels
+
+    def update_drive_list(self):
+        """Update the drive selection dropdown"""
+        self.drive_combo.clear()
+        drives = get_available_drives()
+        for mountpoint, device in drives:
+            self.drive_combo.addItem(f"{mountpoint} ({device})", mountpoint)
+
+    def on_drive_changed(self, index):
+        """Handle drive selection change"""
+        if index >= 0:
+            new_drive = self.drive_combo.itemData(index)
+            self.monitor.set_drive(new_drive)
+            self.update_title()
+
+    def update_title(self):
+        """Update plot title with selected drive info"""
+        drive_name = self.drive_combo.currentText().split(' (')[0]  # Get just the name part
+        self.plot.setTitle(f'Disk Space Monitor - {drive_name}')
 
     def update(self):
         if self.monitor.start_time is None:

@@ -15,6 +15,7 @@ class DiskMonitor:
     def __init__(self):
         self.app = QApplication(sys.argv)
         self.app.aboutToQuit.connect(self.cleanup)  # Connect cleanup to quit signal
+        self.selected_drive = '/'  # Default to root
         self.setup_data_structures()
         self.plot_manager = PlotManager(self)
         self.setup_update_interval()
@@ -47,7 +48,7 @@ class DiskMonitor:
         self.update_interval = 500
     
     def get_disk_usage(self):
-        return get_disk_usage()
+        return get_disk_usage(self.selected_drive)
     
     async def get_docker_usage_async(self):
         return await get_docker_usage_async()
@@ -95,3 +96,8 @@ class DiskMonitor:
     def resume(self):
         self.paused = False
         self.timer.start(self.update_interval)
+    
+    def set_drive(self, drive):
+        if drive != self.selected_drive:
+            self.selected_drive = drive
+            self.reset_plot()
