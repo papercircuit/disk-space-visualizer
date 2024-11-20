@@ -2,7 +2,7 @@ import pyqtgraph as pg
 from PyQt6.QtCore import Qt
 import numpy as np
 import time
-from PyQt6.QtWidgets import QPushButton, QVBoxLayout, QWidget, QComboBox, QHBoxLayout
+from PyQt6.QtWidgets import QPushButton, QVBoxLayout, QWidget, QComboBox, QHBoxLayout, QSlider, QLabel
 import math
 from utils.disk_utils import get_available_drives
 
@@ -32,6 +32,15 @@ class PlotManager:
         self.plot.getViewBox().enableAutoRange(y=False)
         self.plot.getAxis('left').enableAutoSIPrefix(False)
         self.plot.getAxis('bottom').enableAutoSIPrefix(False)
+        
+        # Set default X range to 5 minutes and ensure it starts at 0
+        self.default_window = 5  # 5 minutes
+        self.plot.getViewBox().setXRange(0, self.default_window, padding=0)
+        self.plot.getViewBox().setLimits(xMin=0)  # Ensure x-axis starts at 0
+        
+        # Add menu items for zoom control
+        self.plot.getViewBox().menu.addSeparator()
+        self.plot.getViewBox().menu.addAction('Reset View').triggered.connect(self.reset_view)
         
         # Create curves
         self.system_curve = self.plot.plot(pen=pg.mkPen('b', width=2), name='System')
@@ -76,6 +85,36 @@ class PlotManager:
         self.update_drive_list()
         self.drive_combo.currentIndexChanged.connect(self.on_drive_changed)
         bottom_layout.addWidget(self.drive_combo)
+        
+        # Create zoom slider
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
+        self.zoom_slider.setMinimum(5)  # 5 minutes minimum
+        self.zoom_slider.setMaximum(20)  # 20 minutes maximum
+        self.zoom_slider.setValue(10)  # Default 10 minute view
+        self.zoom_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.zoom_slider.setTickInterval(5)
+        self.zoom_slider.valueChanged.connect(self.on_zoom_changed)
+        
+        # Add zoom controls to bottom layout
+        zoom_layout = QHBoxLayout()
+        zoom_layout.addWidget(QLabel("Zoom (minutes):"))
+        zoom_layout.addWidget(self.zoom_slider)
+        bottom_layout.addLayout(zoom_layout)
+        
+        # Create time navigation slider
+        time_layout = QHBoxLayout()
+        time_layout.addWidget(QLabel("Time Navigation:"))
+        self.time_slider = QSlider(Qt.Orientation.Horizontal)
+        self.time_slider.setMinimum(0)
+        self.time_slider.setMaximum(100)  # We'll update this dynamically
+        self.time_slider.setValue(100)  # Start at latest time
+        self.time_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.time_slider.setTickInterval(10)
+        self.time_slider.valueChanged.connect(self.on_time_changed)
+        time_layout.addWidget(self.time_slider)
+        
+        # Add time navigation to bottom layout
+        bottom_layout.addLayout(time_layout)
         
         # Add bottom controls to main layout
         layout.addLayout(bottom_layout)
@@ -141,13 +180,29 @@ class PlotManager:
         self.monitor.usage.append(used_gb)
         self.monitor.docker_usage.append(docker_used_gb if docker_used_gb is not None else 0)
         
-        # Update curves
+        # Update plot data
         times_array = np.array(list(self.monitor.times))
         self.system_curve.setData(times_array, np.array(list(self.monitor.usage)))
         self.docker_curve.setData(times_array, np.array(list(self.monitor.docker_usage)))
-        
-        # Calculate y-axis max based on total disk space
-        self.y_max = total_gb
+
+        # Get current view range
+        view_range = self.plot.getViewBox().viewRange()
+        current_max_x = view_range[0][1]
+
+        # Auto-scroll if viewing the latest data
+        if current_max_x >= max(times_array) - 0.1 or current_max_x == self.default_window:
+            self.plot.getViewBox().setXRange(
+                max(0, current_time - self.default_window),
+                max(self.default_window, current_time),
+                padding=0
+            )
+
+        # Ensure minimum x is always 0
+        self.plot.getViewBox().setLimits(xMin=0)
+
+        # Update y-axis
+        padding = total_gb * 0.05
+        self.plot.getViewBox().setYRange(0, total_gb + padding, padding=0)
         
         # Calculate nice round number for tick intervals
         if total_gb > 500:
@@ -163,26 +218,29 @@ class PlotManager:
         # Add ticks from 0 up to total_gb
         current = 0
         while current <= total_gb:
-            tick_values.append((current, f"{int(current)}"))
+            tick_values.append((current, f"{int(current)}GB"))
             current += major_y
         
         # Add the total as final tick if it's not already included
         if current - major_y != total_gb:
-            tick_values.append((total_gb, f"{int(total_gb)}"))
+            tick_values.append((total_gb, f"{int(total_gb)}GB"))
         
         # Set custom ticks
         self.plot.getAxis('left').setTicks([tick_values, []])
         
-        # Disable auto-scaling and set fixed range with padding
-        self.plot.getViewBox().disableAutoRange()
-        padding = total_gb * 0.05  # 5% padding
-        self.plot.getViewBox().setLimits(yMin=0, yMax=total_gb + padding)
-        self.plot.getViewBox().setRange(yRange=(0, total_gb + padding), padding=0)
-        self.plot.getViewBox().setXRange(0, current_time + 0.5, padding=0)
-        
-        # Set x-axis ticks
-        x_range = current_time + 0.5
-        major_x = max(0.5, round(x_range / 5, 1))  # At least 0.5m intervals
+        # Set x-axis ticks based on zoom level
+        x_range = view_range[0][1] - view_range[0][0]  # Current visible range
+
+        # Calculate appropriate tick spacing based on zoom level
+        if x_range <= 5:  # 5 minutes or less
+            major_x = 0.5  # 30 second intervals
+        elif x_range <= 15:
+            major_x = 1.0  # 1 minute intervals
+        elif x_range <= 30:
+            major_x = 2.0  # 2 minute intervals
+        else:
+            major_x = 5.0  # 5 minute intervals
+
         self.plot.getAxis('bottom').setTickSpacing(major_x, major_x/2)
         
         # Update info text
@@ -200,6 +258,15 @@ class PlotManager:
                 f'Docker Used: Not Available'
             )
         self.info_label.setText(info_str)
+
+        # Update time slider range if viewing latest data
+        if len(self.monitor.times) > 0:
+            current_value = self.time_slider.value()
+            if current_value == self.time_slider.maximum():  # If slider was at the end
+                self.time_slider.setValue(100)  # Keep it at the end
+            self.time_slider.setEnabled(True)
+        else:
+            self.time_slider.setEnabled(False)
 
     def reset(self):
         self.monitor.times.clear()
@@ -226,6 +293,16 @@ class PlotManager:
         self.pause_button.setChecked(False)
         self.pause_button.setText('Pause')
         self.monitor.resume()
+        
+        # Reset zoom slider
+        self.zoom_slider.setValue(5)
+        
+        # Reset to default 5-minute view starting at 0
+        self.plot.getViewBox().setXRange(0, self.default_window, padding=0)
+        self.plot.getViewBox().setLimits(xMin=0)
+        
+        # Reset time slider
+        self.time_slider.setValue(100)
         
         # Force a redraw
         self.plot.replot()
@@ -337,3 +414,59 @@ class PlotManager:
             print("Plot refreshed successfully")
         except Exception as e:
             print(f"Error refreshing plot: {e}")
+
+    def reset_view(self):
+        """Reset view to show last 5 minutes"""
+        if len(self.monitor.times) > 0:
+            latest_time = max(self.monitor.times)
+            self.plot.getViewBox().setXRange(
+                max(0, latest_time - self.default_window),
+                latest_time,
+                padding=0
+            )
+
+    def on_zoom_changed(self, value):
+        """Handle zoom slider change"""
+        self.default_window = value
+        if len(self.monitor.times) > 0:
+            latest_time = max(self.monitor.times)
+            self.plot.getViewBox().setXRange(
+                max(0, latest_time - self.default_window),
+                latest_time,
+                padding=0
+            )
+            
+            # Update x-axis ticks immediately
+            if value <= 5:  # 5 minutes or less
+                major_x = 0.5  # 30 second intervals
+            elif value <= 15:
+                major_x = 1.0  # 1 minute intervals
+            elif value <= 30:
+                major_x = 2.0  # 2 minute intervals
+            else:
+                major_x = 5.0  # 5 minute intervals
+            
+            self.plot.getAxis('bottom').setTickSpacing(major_x, major_x/2)
+
+    def on_time_changed(self, value):
+        """Handle time slider change"""
+        if len(self.monitor.times) == 0:
+            return
+        
+        # Convert percentage to time
+        latest_time = max(self.monitor.times)
+        earliest_time = max(0, latest_time - self.default_window)
+        total_time = max(self.monitor.times)
+        
+        # Calculate target time based on slider percentage
+        target_time = (value / 100.0) * total_time
+        
+        # Ensure we stay within bounds
+        target_time = max(self.default_window, min(total_time, target_time))
+        
+        # Update view range while maintaining zoom level
+        self.plot.getViewBox().setXRange(
+            max(0, target_time - self.default_window),
+            target_time,
+            padding=0
+        )

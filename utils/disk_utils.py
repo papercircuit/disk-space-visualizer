@@ -44,7 +44,7 @@ def get_available_drives():
                     
                     if volume_name and volume_name != "None":
                         # Add with friendly name
-                        drives.append((p.mountpoint, f"{volume_name} ({p.device})"))
+                        drives.append((p.mountpoint, f"{volume_name}"))
                     else:
                         # Fallback to mount point name if no volume name
                         name = p.mountpoint.split('/')[-1]
