@@ -29,10 +29,9 @@ If you want to monitor Docker containers, make sure Docker Desktop for Mac is in
 
 1. Clone or download this repository
 2. Open Terminal
-3. Navigate to the project directory:
-   `cd path/to/disk-space-visualizer`
+3. Navigate to the project directory
 4. Run the script:
-   `python3 disk_monitor.py`
+   `python3 main.py`
 
 ## Usage
 

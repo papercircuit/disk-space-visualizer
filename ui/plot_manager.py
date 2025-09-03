@@ -45,8 +45,15 @@ class PlotManager:
         # Create curves
         self.system_curve = self.plot.plot(pen=pg.mkPen('b', width=2), name='System')
         self.docker_curve = self.plot.plot(pen=pg.mkPen('r', width=2), name='Docker')
-        self.docker_capacity_line = pg.InfiniteLine(angle=0, pen=pg.mkPen('r', style=Qt.PenStyle.DashLine))
-        self.plot.addItem(self.docker_capacity_line)
+        
+        # Create Docker virtual disk limit line (will be positioned in update())
+        self.docker_limit_line = pg.InfiniteLine(
+            pos=0, angle=0, 
+            pen=pg.mkPen('r', width=2, style=Qt.PenStyle.DashLine),
+            label='Docker Virtual Disk',
+            labelOpts={'position': 0.80, 'color': 'r'}
+        )
+        self.plot.addItem(self.docker_limit_line)
         
         # Create cursor line and tooltip
         self.cursor_line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('k', style=Qt.PenStyle.DotLine))
@@ -168,12 +175,16 @@ class PlotManager:
         # Get Docker usage
         docker_total_gb, docker_used_gb = self.monitor.get_docker_usage()
         
-        # Update Docker capacity line
+        # Update Docker limit line with actual total size
         if docker_total_gb is not None:
-            self.docker_capacity_line.setValue(docker_total_gb)
-            self.docker_capacity_line.show()
+            self.docker_limit_line.setPos(docker_total_gb)
+            used_percent = (docker_used_gb / docker_total_gb * 100) if docker_total_gb > 0 else 0
+            self.docker_limit_line.label.setHtml(
+                f'Docker Virtual Disk Limit: {docker_total_gb:.1f}GB'
+            )
+            self.docker_limit_line.show()
         else:
-            self.docker_capacity_line.hide()
+            self.docker_limit_line.hide()
         
         # Append new data
         self.monitor.times.append(current_time)
@@ -200,9 +211,10 @@ class PlotManager:
         # Ensure minimum x is always 0
         self.plot.getViewBox().setLimits(xMin=0)
 
-        # Update y-axis
-        padding = total_gb * 0.05
-        self.plot.getViewBox().setYRange(0, total_gb + padding, padding=0)
+        # Update y-axis to show full range including Docker limit
+        max_y = max(total_gb, docker_total_gb if docker_total_gb is not None else 0)
+        padding = max_y * 0.05  # 5% padding
+        self.plot.getViewBox().setYRange(0, max_y + padding, padding=0)
         
         # Calculate nice round number for tick intervals
         if total_gb > 500:
